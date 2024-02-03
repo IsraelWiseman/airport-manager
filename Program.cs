@@ -1,81 +1,64 @@
-﻿using AirportLogic.Models;
-using AirportModels;
-using Newtonsoft.Json;
-using System.Text;
+using AirportLogic.Services;
+using AirportWebApi;
+using AirportWebApi.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.SignalR;
 
-namespace AirportWebApiSimulator
+var builder = WebApplication.CreateBuilder(args);
+
+// Configuration
+builder.Configuration.AddJsonFile("appsettings.json");
+builder.Configuration.AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", true);
+
+string connectionString = builder.Configuration["ConnectionStrings:DefaultConnection"]!;
+builder.Services.AddDbContext<AirportContext>(options => options.UseSqlServer(connectionString));
+
+// Add services to the container.
+builder.Services.AddControllers();
+builder.Services.AddTransient<Logic>();
+builder.Services.AddTransient<Locations>();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.AddCors();
+builder.Services.AddSignalR();
+
+var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
 {
-    class Program
-    {
-        static async Task Main(string[] args)
-        {
-            string baseUrl = "https://localhost:7130/";
-
-            var httpClient = new HttpClient
-            {
-                BaseAddress = new Uri(baseUrl)
-            };
-
-            Random random = new();
-
-            try
-            {
-                while (true)
-                {
-                    // Generate a random FlightNumber (8 characters)
-                    string flightNumber = Guid.NewGuid().ToString("N")[..8];
-                    string planeCode = Guid.NewGuid().ToString("N")[..8];
-
-
-                    // Generate a random PlaneStatus
-                    PlaneStatus planeStatus = (PlaneStatus)random.Next(0, 2);
-
-                    // Create a new Plane object
-                    var plane = new Plane
-                    {
-                        Status = planeStatus,
-                        PlaneCode = planeCode
-                    };
-
-                    // Create a new Flight object
-                    var flight = new Flight
-                    {
-                        FlightNumber = flightNumber,
-                        Plane = plane
-                    };
-
-                    // Serialize the payload to JSON
-                    var payloadJson = JsonConvert.SerializeObject(new
-                    {
-                        Flight = flight,
-                        Plane = plane
-                    });
-
-                    // Determine the endpoint based on PlaneStatus
-                    string endpoint = planeStatus == PlaneStatus.Landing ? "api/LandHandler" : "api/DepartureHandler";
-
-                    // Send a POST request to the appropriate endpoint
-                    var response = await httpClient.PostAsync(endpoint, new StringContent(payloadJson, Encoding.UTF8, "application/json"));
-
-                    response.EnsureSuccessStatusCode();
-
-                    // Read the response from the server
-                    var responseContent = await response.Content.ReadAsStringAsync();
-
-                    // Output the response
-                    Console.WriteLine($"Flight Number: {flightNumber}, Plane Status: {planeStatus}");
-                    Console.WriteLine("Response:");
-                    Console.WriteLine(responseContent);
-                    Console.WriteLine();
-
-                    // Wait for 3 seconds before creating the next Plane
-                    await Task.Delay(3000);
-                }
-            }
-            catch (HttpRequestException ex)
-            {
-                Console.WriteLine($"An error occurred: {ex.Message}");
-            }
-        }
-    }
+    var ctx = scope.ServiceProvider.GetRequiredService<AirportContext>();
+    ctx.Database.EnsureDeleted();
+    ctx.Database.EnsureCreated();
 }
+
+// Configure the HTTP request pipeline.
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseHttpsRedirection();
+app.UseRouting();
+
+app.UseCors(builder =>
+{
+    builder.AllowAnyHeader().AllowAnyMethod()
+    .WithOrigins("http://localhost:5173").WithOrigins("http://localhost:5174").WithOrigins("https://localhost:7130")
+    .AllowCredentials();
+});
+
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.UseEndpoints(endpoints =>
+{
+    // Map the hub endpoint
+    endpoints.MapHub<FlightUpdateHub>("/flightUpdateHub");
+
+    // Map other endpoints
+    endpoints.MapControllers();
+});
+
+app.Run();
